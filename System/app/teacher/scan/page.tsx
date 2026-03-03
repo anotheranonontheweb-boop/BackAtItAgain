@@ -567,26 +567,57 @@ export default function TeacherScanPage() {
       }
 
       const cameraId = cameras[cameraIndex % cameras.length].id
+      const cameraLabel = cameras[cameraIndex % cameras.length].label.toLowerCase()
+      
+      // Determine if this is a front or back camera
+      const isFrontCamera = cameraLabel.includes('front') || cameraLabel.includes('user')
+      
+      // Log camera info for debugging
+      console.log("Starting camera:", cameraId, "Label:", cameras[cameraIndex % cameras.length].label, "Is Front:", isFrontCamera)
 
-      // Start scanning with selected camera
-      await scanner.start(
-        { deviceId: { exact: cameraId } },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 },
-        },
-        (decodedText: string) => {
-          if (decodedText && isScanning.current) {
-            processScan(decodedText)
+      // Try using facingMode constraint first (more reliable on some devices)
+      // For back camera use "environment", for front use "user"
+      const facingMode = isFrontCamera ? "user" : "environment"
+      
+      // Start scanning - try with constraints first
+      try {
+        await scanner.start(
+          { facingMode },
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+          },
+          (decodedText: string) => {
+            if (decodedText && isScanning.current) {
+              processScan(decodedText)
+            }
+          },
+          (error: any) => {
+            // Ignore scan errors
           }
-        },
-        (error: any) => {
-          // Ignore scan errors
-        }
-      )
+        )
+      } catch (constraintError) {
+        // If facingMode doesn't work, fall back to deviceId
+        console.log("facingMode failed, trying deviceId:", constraintError)
+        await scanner.start(
+          { deviceId: { exact: cameraId } },
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+          },
+          (decodedText: string) => {
+            if (decodedText && isScanning.current) {
+              processScan(decodedText)
+            }
+          },
+          (error: any) => {
+            // Ignore scan errors
+          }
+        )
+      }
     } catch (err: any) {
       console.error("Camera switch error:", err)
-      setError("Failed to switch camera")
+      setError("Failed to switch camera: " + err.message)
     }
   }
 
@@ -761,6 +792,30 @@ export default function TeacherScanPage() {
                     </span>
                   )}
                 </div>
+                
+                {/* Camera Selector */}
+                {availableCameras.length > 1 && (
+                  <div className="mb-3">
+                    <select
+                      value={currentCameraIndex}
+                      onChange={async (e) => {
+                        const index = parseInt(e.target.value)
+                        setCurrentCameraIndex(index)
+                        stopCamera()
+                        await new Promise(resolve => setTimeout(resolve, 300))
+                        await startCameraWithCameraIndex(index)
+                      }}
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"
+                    >
+                      {availableCameras.map((camera, index) => (
+                        <option key={camera.id} value={index}>
+                          {camera.label || `Camera ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
                 <div className="relative aspect-square bg-black rounded-lg overflow-hidden">
                   <div id="qr-reader" className="w-full h-full"></div>
                 </div>
