@@ -21,15 +21,6 @@ interface Student {
   avatar?: string
 }
 
-interface PendingStudent {
-  id: number
-  name: string
-  grade: string
-  section: string
-  avatar?: string
-  email?: string
-}
-
 export default function TeacherScanPage() {
   const router = useRouter()
   const [sessionActive, setSessionActive] = useState(false)
@@ -48,15 +39,21 @@ export default function TeacherScanPage() {
   const [absenceType, setAbsenceType] = useState<"excused" | "unexcused">("unexcused")
   const [manualId, setManualId] = useState("")
   const [manualMode, setManualMode] = useState(false)
+  
+  // Confirmation modal for Present/Late selection
+  const [showConfirmModal, setShowConfirmModal] = useState(false)
+  const [pendingStudent, setPendingStudent] = useState<{
+    id: number
+    name: string
+    grade: string
+    section: string
+    avatar?: string
+    qrData: string
+  } | null>(null)
   const [availableCameras, setAvailableCameras] = useState<{id: string, label: string}[]>([])
   const [currentCameraIndex, setCurrentCameraIndex] = useState(0)
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const isScanning = useRef(false)
-
-  // Confirmation modal states
-  const [showConfirmModal, setShowConfirmModal] = useState(false)
-  const [pendingStudent, setPendingStudent] = useState<PendingStudent | null>(null)
-  const [pendingQrData, setPendingQrData] = useState<string | null>(null)
 
   useEffect(() => {
     const checkAuth = () => {
@@ -189,33 +186,21 @@ export default function TeacherScanPage() {
     return avatar && avatar.startsWith('data:image')
   }
 
-  // Process scanned QR code - show confirmation modal first
-  const processScanWithConfirmation = async (qrData: string) => {
-    // Debug: log the scan
-    console.log("[SCAN] Processing QR:", qrData)
-    
+  // Process scanned QR code - show confirmation modal
+  const processScan = async (qrData: string) => {
     if (!sessionId) {
-      console.log("[SCAN] No session ID")
       setError("No active session")
       return
     }
 
-    // Prevent duplicate scans in quick succession
+    // Prevent duplicate scans
     const existingScan = scannedStudents.find(s => 
       qrData.includes(s.id.toString())
     )
     if (existingScan) {
-      console.log("[SCAN] Already scanned:", existingScan)
       setError("Already scanned!")
       setTimeout(() => setError(""), 3000)
       return
-    }
-
-    // CRITICAL: Stop scanning while showing modal to prevent any double-processing
-    console.log("[SCAN] Stopping camera temporarily")
-    isScanning.current = false
-    if (scannerRef.current) {
-      scannerRef.current.pause()
     }
 
     // Parse QR code to get student ID
@@ -223,18 +208,12 @@ export default function TeacherScanPage() {
     const match = qrData.match(qrPattern)
     
     if (!match) {
-      console.log("[SCAN] Invalid QR format")
       setError("Invalid QR code format")
-      // Resume scanning
-      isScanning.current = true
-      if (scannerRef.current) {
-        scannerRef.current.resume()
-      }
+      setTimeout(() => setError(""), 3000)
       return
     }
 
     const studentId = parseInt(match[1])
-    console.log("[SCAN] Student ID:", studentId)
 
     try {
       // Fetch student details from database
@@ -242,62 +221,54 @@ export default function TeacherScanPage() {
       const data = await response.json()
       const studentList = data.students || []
       
-      const student = studentList.find((s: Student) => s.id === studentId)
+      const scannedStudent = studentList.find((s: Student) => s.id === studentId)
       
-      if (!student) {
-        console.log("[SCAN] Student not found in section")
+      if (!scannedStudent) {
         setError("Student not found in your section")
-        // Resume scanning
-        isScanning.current = true
-        if (scannerRef.current) {
-          scannerRef.current.resume()
-        }
         setTimeout(() => setError(""), 3000)
         return
       }
 
-      // Check if already scanned (double check)
+      // Check if already scanned
       const alreadyScanned = scannedStudents.find(s => s.id === studentId)
       if (alreadyScanned) {
-        console.log("[SCAN] Already in scanned list:", alreadyScanned)
-        setError(`${student.name} already marked as ${alreadyScanned.status}!`)
-        // Resume scanning
-        isScanning.current = true
-        if (scannerRef.current) {
-          scannerRef.current.resume()
-        }
+        setError(`${scannedStudent.name} already marked as ${alreadyScanned.status}!`)
         setTimeout(() => setError(""), 3000)
         return
       }
 
-      // Show confirmation modal - camera is now paused
+      // Show confirmation modal instead of directly recording
       setPendingStudent({
-        id: student.id,
-        name: student.name,
-        grade: student.grade,
-        section: student.section_id,
-        avatar: student.avatar
+        id: scannedStudent.id,
+        name: scannedStudent.name,
+        grade: scannedStudent.grade,
+        section: scannedStudent.section_id || "",
+        avatar: scannedStudent.avatar,
+        qrData: qrData
       })
-      setPendingQrData(qrData)
       setShowConfirmModal(true)
-    } catch (err) {
-      console.error("[SCAN] Error fetching student:", err)
-      setError("Failed to validate student")
-      // Resume scanning on error
-      isScanning.current = true
+      
+      // Pause camera while modal is shown to prevent continuous scanning
+      isScanning.current = false
       if (scannerRef.current) {
-        scannerRef.current.resume()
+        scannerRef.current.pause()
       }
+    } catch (err) {
+      console.error("Scan error:", err)
+      setError("Failed to process scan")
+      setTimeout(() => setError(""), 3000)
     }
   }
 
-  // Confirm attendance after modal - with status (present or late)
+  // Confirm attendance with status (present or late)
   const confirmAttendance = async (status: "present" | "late") => {
-    if (!pendingStudent || !pendingQrData || !sessionId) return
+    if (!pendingStudent || !sessionId) return
+
+    const qrData = pendingStudent.qrData
 
     try {
-      // Use the teacher attendance API to manually mark with specific status
-      const response = await fetch("/api/teacher/attendance", {
+      // Record attendance using the teacher API with manual status
+      const attendanceResponse = await fetch("/api/teacher/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -310,10 +281,10 @@ export default function TeacherScanPage() {
         }),
       })
 
-      const data = await response.json()
+      const attendanceData = await attendanceResponse.json()
 
-      if (data.success || data.message?.includes("already")) {
-        const student: ScannedStudent = {
+      if (attendanceData.success) {
+        const newStudent: ScannedStudent = {
           id: pendingStudent.id,
           name: pendingStudent.name,
           grade: pendingStudent.grade,
@@ -322,37 +293,40 @@ export default function TeacherScanPage() {
           avatar: pendingStudent.avatar
         }
 
-        setScannedStudents((prev) => [...prev, student])
-        setLastScan(student)
-        setSuccess(`${student.name} marked as ${student.status}!`)
+        setScannedStudents(prev => [...prev, newStudent])
+        setLastScan(newStudent)
+        setSuccess(`${newStudent.name} marked as ${status}!`)
         setError("")
 
-        // Play sound
+        // Play success sound
         try {
           const audio = new Audio("/beep.mp3")
           audio.play().catch(() => {})
         } catch {}
 
         setTimeout(() => setSuccess(""), 3000)
+      } else if (attendanceData.duplicate) {
+        setError(`${pendingStudent.name} already checked in`)
+        setTimeout(() => setError(""), 3000)
       } else {
-        setError(data.error || "Failed to mark attendance")
+        setError(attendanceData.error || "Failed to record attendance")
+        setTimeout(() => setError(""), 3000)
       }
     } catch (err) {
       console.error("Scan error:", err)
       setError("Failed to process scan")
+      setTimeout(() => setError(""), 3000)
     } finally {
       setShowConfirmModal(false)
       setPendingStudent(null)
-      setPendingQrData(null)
       
-      // Resume the scanner so teacher can scan next student
-      console.log("[SCAN] Resuming scanner after confirmation")
+      // Resume the camera
       isScanning.current = true
       if (scannerRef.current) {
         try {
           scannerRef.current.resume()
         } catch (e) {
-          console.log("[SCAN] Resume failed, restarting camera")
+          console.log("Camera resume failed, restarting")
           startCamera()
         }
       }
@@ -363,16 +337,14 @@ export default function TeacherScanPage() {
   const cancelAttendance = () => {
     setShowConfirmModal(false)
     setPendingStudent(null)
-    setPendingQrData(null)
     
-    // Resume the scanner so teacher can scan next student
-    console.log("[SCAN] Resuming scanner after cancel")
+    // Resume the camera
     isScanning.current = true
     if (scannerRef.current) {
       try {
         scannerRef.current.resume()
       } catch (e) {
-        console.log("[SCAN] Resume failed, restarting camera")
+        console.log("Camera resume failed, restarting")
         startCamera()
       }
     }
@@ -503,7 +475,7 @@ export default function TeacherScanPage() {
         (decodedText: string) => {
           // QR code detected!
           if (decodedText && isScanning.current) {
-            processScanWithConfirmation(decodedText)
+            processScan(decodedText)
           }
         },
         (error: any) => {
@@ -563,7 +535,7 @@ export default function TeacherScanPage() {
         },
         (decodedText: string) => {
           if (decodedText && isScanning.current) {
-            processScanWithConfirmation(decodedText)
+            processScan(decodedText)
           }
         },
         (error: any) => {
@@ -670,85 +642,6 @@ export default function TeacherScanPage() {
     // Clear session from localStorage
     localStorage.removeItem("activeSessionId")
     router.push("/teacher")
-  }
-
-  const processScan = async (qrData: string) => {
-    if (!sessionId) {
-      setError("No active session")
-      return
-    }
-
-    // Prevent duplicate scans in quick succession
-    const existingScan = scannedStudents.find(s => 
-      qrData.includes(s.id.toString())
-    )
-    if (existingScan) {
-      setError("Already scanned!")
-      setTimeout(() => setError(""), 3000)
-      return
-    }
-
-    try {
-      const response = await fetch("/api/attendance/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token: qrData,
-          sessionId: sessionId,
-        }),
-      })
-
-      // Check if response is ok
-      if (!response.ok) {
-        const errorText = await response.text()
-        setError(`Scan failed: ${errorText}`)
-        setTimeout(() => setError(""), 3000)
-        return
-      }
-
-      const data = await response.json()
-
-      if (data.success) {
-        const student: ScannedStudent = {
-          id: data.student.id,
-          name: data.student.name,
-          grade: data.student.grade,
-          time: new Date(data.scannedAt).toLocaleTimeString(),
-          status: data.status === "late" ? "late" : "present",
-        }
-
-        // Add to scanned students list (using functional update to ensure we have latest state)
-        setScannedStudents(prev => {
-          // Check again to prevent duplicates
-          if (prev.some(s => s.id === student.id)) {
-            return prev
-          }
-          return [...prev, student]
-        })
-        setLastScan(student)
-        setSuccess(`${student.name} marked as ${student.status}!`)
-        setError("")
-
-        // Play sound
-        try {
-          const audio = new Audio("/beep.mp3")
-          audio.play().catch(() => {})
-        } catch {}
-
-        // Keep success message longer and don't auto-clear
-        setTimeout(() => setSuccess(""), 5000)
-      } else if (data.duplicate) {
-        setError(`${data.student?.name || "Student"} already checked in`)
-        setTimeout(() => setError(""), 3000)
-      } else {
-        setError(data.error || "Invalid QR code")
-        setTimeout(() => setError(""), 3000)
-      }
-    } catch (err) {
-      console.error("Scan error:", err)
-      setError("Failed to process scan")
-      setTimeout(() => setError(""), 3000)
-    }
   }
 
   const handleManualSubmit = async (e: React.FormEvent) => {
@@ -1153,15 +1046,15 @@ export default function TeacherScanPage() {
               
               {/* Student Profile */}
               <div className="flex flex-col items-center">
-                <div className="w-24 h-24 rounded-full overflow-hidden mb-4 bg-gradient-to-br from-[#4361ee] to-[#3a0ca3] flex items-center justify-center">
-                  {pendingStudent.avatar && isAvatarImage(pendingStudent.avatar) ? (
+                <div className="w-20 h-20 rounded-full overflow-hidden mb-4 bg-gradient-to-br from-[#4361ee] to-[#3a0ca3] flex items-center justify-center">
+                  {pendingStudent.avatar && pendingStudent.avatar.startsWith('data:image') ? (
                     <img 
                       src={pendingStudent.avatar} 
                       alt={pendingStudent.name} 
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <span className="text-4xl text-white font-bold">
+                    <span className="text-3xl text-white font-bold">
                       {pendingStudent.name.charAt(0).toUpperCase()}
                     </span>
                   )}
