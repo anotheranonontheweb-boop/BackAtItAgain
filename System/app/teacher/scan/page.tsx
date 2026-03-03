@@ -420,6 +420,22 @@ export default function TeacherScanPage() {
 
   const startCamera = async (preferEnvironment: boolean = true) => {
     try {
+      // Stop any existing camera first
+      if (scannerRef.current) {
+        try {
+          await scannerRef.current.stop()
+        } catch (e) {
+          // Ignore errors when stopping
+        }
+        scannerRef.current = null
+      }
+      
+      // Clear the QR reader element
+      const qrReader = document.getElementById("qr-reader")
+      if (qrReader) {
+        qrReader.innerHTML = ""
+      }
+      
       isScanning.current = true
       
       const scanner = new Html5Qrcode("qr-reader")
@@ -504,7 +520,17 @@ export default function TeacherScanPage() {
       return
     }
     
+    // Clear the QR reader element first
+    const qrReader = document.getElementById("qr-reader")
+    if (qrReader) {
+      qrReader.innerHTML = ""
+    }
+    
     stopCamera()
+    
+    // Add delay to ensure camera is fully released
+    await new Promise(resolve => setTimeout(resolve, 500))
+    
     const nextIndex = (currentCameraIndex + 1) % availableCameras.length
     setCurrentCameraIndex(nextIndex)
     await startCameraWithCameraIndex(nextIndex)
@@ -513,6 +539,22 @@ export default function TeacherScanPage() {
   // Start camera with specific camera index
   const startCameraWithCameraIndex = async (cameraIndex: number) => {
     try {
+      // Stop any existing camera first
+      if (scannerRef.current) {
+        try {
+          await scannerRef.current.stop()
+        } catch (e) {
+          // Ignore errors when stopping
+        }
+        scannerRef.current = null
+      }
+      
+      // Clear the QR reader element
+      const qrReader = document.getElementById("qr-reader")
+      if (qrReader) {
+        qrReader.innerHTML = ""
+      }
+      
       isScanning.current = true
       
       const scanner = new Html5Qrcode("qr-reader")
